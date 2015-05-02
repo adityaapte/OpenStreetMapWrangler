@@ -1,0 +1,175 @@
+Map Area: Mumbai, India
+                                                
+https://s3.amazonaws.com/metro-extracts.mapzen.com/mumbai_india.osm.bz2
+
+0. Introduction and use case
+1. Problems Encountered in the Map
+- Inconsistent names for Cafes
+- Postal Codes
+2. Data Overview
+3. Additional Ideas
+- The use of addr:full instead of addr:housename
+- Additional data exploration using MongoDB
+Conclusion
+
+0. Introduction and use case:
+
+Use Case: I am interested in knowing what are the most prevalent cafes in Mumbai in addition to answering some basic questions about the data. Hence my data cleanup and document design is geared towards answering this question.
+Sample Document Format:
+I reshaped the osm data to the following example document format:
+{u'amenity': {u'amenity': u'hospital', u'name': u'Bhabha Hospital'}, u'created': {u'changeset': u'599102', u'version': u'2', u'user': u'deye', u'timestamp': u'2009-02-21T07:22:43Z', u'uid': u'57987'}, u'pos': [19.05718, 72.8336432], u'address': {u'housenumber': u'0222 642 2541'}, u'_id': ObjectId('5544571bfe71e991a22a142d'), u'type': u'node', u'id': u'347120067'}
+
+Notice that each document contains sub-documents for amenity and address, if available. I imported this data to a mongodb collection named mumbai_india.
+
+                                                                                                
+1. Problems Encountered in the Map
+                                                
+
+Inconsistent names for Cafes
+		                                                                
+Once the data was imported to MongoDB, some basic querying revealed that the names of cafes were inconsistent. For example: “Cafe Coffee Day” was named as “Caffe Coffee Day” and “Starbucks Coffee” was named as “Starbucks” in few documents. I updated the café names to make them consistent. 
+
+db.mumbai_india.update({"amenity.name":"Caffe Coffee Day"}, {"$set":{"amenity.name":"Cafe Coffee Day"}}, multi=True)
+
+                                                
+Postal Codes
+                                                
+The postal codes in India must be a 6 digit number. I grouped the postal codes looked at the ones that were not exactly equal to 6 characters or had characters other than digits. Here is a query that revealed inconsistent postal codes:
+
+
+res = db.mumbai_india.aggregate([{"$match":{"address.postcode":{"$exists":1}}},
+{"$group":{"_id":"$address.postcode", "count":{"$sum":1}}},
+{"$sort":{"count":-1}}])
+
+for pin in res['result']:
+    if set(pin["_id"]) > set(string.digits) or len(pin["_id"]) > 6:
+        print pin
+
+Invalid pincodes (37 entries are buggy)
+{u'count': 7, u'_id': u'400 078'}
+{u'count': 5, u'_id': u'400076, India'}
+{u'count': 4, u'_id': u'400 071'}
+{u'count': 4, u'_id': u'410 209'}
+{u'count': 3, u'_id': u'400 601'}
+{u'count': 2, u'_id': u'400 022'}
+{u'count': 2, u'_id': u'4000072'}
+{u'count': 1, u'_id': u'410 201'}
+{u'count': 1, u'_id': u'4000089'}
+{u'count': 1, u'_id': u'4oooo89'}
+{u'count': 1, u'_id': u'400059.'}
+{u'count': 1, u'_id': u'400 092'}
+{u'count': 1, u'_id': u'4000607'}
+{u'count': 1, u'_id': u' 410201'}
+{u'count': 1, u'_id': u'4000082'}
+{u'count': 1, u'_id': u'40000056'}
+{u'count': 1, u'_id': u'400 021'}
+
+Then, I cleaned up the postal codes that had non-digital characters. Here is the code I used to clean-up:
+
+import string
+
+# Create dictionary of incorrect pins
+pin_dict = {}
+for pin in res['result']:
+    if set(pin["_id"]) > set(string.digits) or len(pin["_id"]) > 6: 
+        updated_str = pin["_id"]
+        for elem in pin["_id"]:
+            if elem not in set(string.digits):
+                updated_str = updated_str.replace(elem,"")
+         if len(updated_str) == 6:
+                pin_dict[pin["_id"]] = updated_str
+# Update pins
+for pin in pin_dict:
+    db.mumbai_india.update({"address.postcode":pin}, {"$set":{"address.postcode":pin_dict[pin]}}, multi=True)
+
+After clean-up, the number of inconsistent postal codes reduced significantly. There were still some postal codes that were not exactly 6 digits but had all characters as digits. Hence, they could not be cleaned-up programmatically. Sophisticated techniques could be used to correct these pincodes.
+                                                
+Here is the result of clean-up (just 5 entries are buggy):
+Invalid pincodes after applying the fix:
+{u'count': 1, u'_id': u'4oooo89'}
+{u'count': 1, u'_id': u'4000607'}
+{u'count': 1, u'_id': u'4000089'}
+{u'count': 1, u'_id': u'4000082'}
+{u'count': 1, u'_id': u'40000056'}                                                
+
+                                                
+2. Data Overview
+                                                
+This section contains basic statistics about the dataset and the MongoDB queries used to gather them.
+                                                
+File sizes
+                                                
+mumbai_india.osm ......... 111 MB
+mumbai_india.osm.json .... 124 MB
+                                                
+# Number of documents
+                                                
+db.mumbai_india.find().count() 
+588582
+                                                
+# Number of nodes
+                                                
+db.mumbai_india.find({"type":"node"}).count()
+540562
+                                                
+# Number of ways
+                                                
+db.mumbai_india.find({"type":"way"}).count()
+48020
+  
+# Users
+
+users = db.mumbai_india.aggregate([{"$group":{"_id":"$created.user", "count":{"$sum":1}}},
+{"$sort": {"count":-1}}])
+
+                                           
+# Number of unique users
+                                                
+len(users['result'])
+873
+                                                
+# Top 1 contributing user
+
+users['result'][0]                                                
+[ {u'count': 91222, u'_id': u'parambyte'} ] 
+ 
+                                                
+# Number of users appearing only once (having 1 post)
+                                                
+db.mumbai_india.aggregate([{"$group":{"_id":"$created.user", "count":{"$sum":1}}}, {"$group":{"_id":"$count", "num_users":{"$sum":1}}}, {"$sort":{"_id":1}}, {"$limit":1}])
+[{u'num_users': 170, u'_id': 1}]
+
+
+3. Additional Ideas
+                                                
+The use of addr:full instead of addr:housename 
+It is a common practice to specify landmarks in the postal address in Mumbai, India. I noticed that landmarks such as “Opposite to …” were used within the addr:housename field. This should be cleaned up and the landmarks should be stored within the addr:full field as per the openStreetMap documentation.                                                
+		
+
+Additional data exploration using MongoDB queries
+                                                
+# Top 10 appearing amenities
+                                                
+amenities = db.mumbai_india.aggregate([{"$match":{"amenity":{"$exists":1}}}, 
+{"$group":{"_id":"$amenity.amenity", "count":{"$sum":1}}},
+{"$sort": {"count":-1}},
+{"$limit":10}])
+
+{u'ok': 1.0, u'result': [{u'count': 355, u'_id': u'place_of_worship'}, {u'count': 254, u'_id': u'restaurant'}, {u'count': 235, u'_id': u'school'}, {u'count': 210, u'_id': u'bank'}, {u'count': 158, u'_id': u'hospital'}, {u'count': 124, u'_id': u'fuel'}, {u'count': 121, u'_id': u'parking'}, {u'count': 113, u'_id': u'bus_station'}, {u'count': 109, u'_id': u'cafe'}, {u'count': 94, u'_id': u'college'}]}
+
+                                        
+                                                
+                                                
+# Top appearing cafes:
+
+cafes = db.mumbai_india.aggregate([{"$match":{"amenity":{"$exists":1}, "amenity.amenity":"cafe", "amenity.name":{"$ne": None}}},
+{"$group":{"_id":"$amenity.name", "count":{"$sum":1}}},
+{"$match": {"count": {"$gt": 1}}},
+{"$sort":{"count":-1}}])
+
+{u'ok': 1.0, u'result': [{u'count': 32, u'_id': u'Cafe Coffee Day'}, {u'count': 6, u'_id': u'Costa Coffee'}, {u'count': 5, u'_id': u'Bru Cafe'}, {u'count': 3, u'_id': u'Starbucks Coffee'}, {u'count': 3, u'_id': u'Barista'}]}
+
+                                                                 
+
+Conclusion                        
+The Amenities data is quite incomplete although it is a fair representation of the distribution of Amenities as well as Cafes (that I was interested in looking at). Amenity-providers could be encouraged to input information about their facility in the Map so that it enhances their business. 
